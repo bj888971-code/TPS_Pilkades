@@ -1,0 +1,1907 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Dashboard Pendataan Warga & Status Pemilih</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- jsPDF & jsPDF-AutoTable CDN for PDF Export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-8px); }
+            40%, 80% { transform: translateX(8px); }
+        }
+        .animate-shake { animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both; }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 antialiased min-h-screen flex flex-col relative overflow-hidden">
+
+    <script>
+        // ====================================================================
+        //  PENGATURAN: tempel URL Web App Google Apps Script Anda di sini
+        //  (berakhiran /exec). Hanya di satu tempat ini.
+        // ====================================================================
+        const API_URL = "https://script.google.com/macros/s/AKfycbxFx7V4Eh6RZZBpI9_4TDmSWVx0iOVucJKkjuh5FgYBI4ofOuVMcO58IZs7MzXOTjzC/exec";
+
+        // Konfigurasi Cache Storage Key
+        const CACHE_KEY = "DATA_WARGA_CACHE_V2";
+        const CACHE_TIME_KEY = "DATA_WARGA_CACHE_TIME_V2";
+        const TOKEN_KEY = "DATA_WARGA_TOKEN";
+
+        function apiReady() {
+            return !!API_URL && !API_URL.includes("YOUR_APPS_SCRIPT") && !API_URL.includes("TEMPEL_URL");
+        }
+
+        // Token sesi dari server (disimpan per tab, hilang saat tab ditutup)
+        function getAuthToken() { try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
+        function setAuthToken(v) { try { v ? sessionStorage.setItem(TOKEN_KEY, v) : sessionStorage.removeItem(TOKEN_KEY); } catch (e) {} }
+
+        // Semua permintaan ke server lewat POST (token tidak muncul di URL).
+        // Tanpa header khusus agar tidak memicu preflight CORS pada Apps Script.
+        async function apiRequest(action, payload = {}) {
+            const res = await fetch(API_URL, {
+                method: "POST",
+                body: JSON.stringify({ action: action, token: getAuthToken(), ...payload })
+            });
+            const json = await res.json();
+            if (json && json.code === "UNAUTHORIZED") {
+                handleSessionExpired();
+                throw new Error("Sesi berakhir");
+            }
+            return json;
+        }
+    </script>
+
+    <div id="login-overlay" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/90 backdrop-blur-md p-4 transition-all duration-500">
+        <div id="login-card" class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 sm:p-8 border border-slate-200 text-center relative overflow-hidden">
+            <div class="absolute -top-10 -right-10 w-32 h-32 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none"></div>
+            <div class="w-16 h-16 rounded-2xl bg-indigo-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-600/30 text-white">
+                <i class="fa-solid fa-lock text-2xl"></i>
+            </div>
+            <h2 class="text-xl font-bold text-slate-800">Aplikasi Terkunci</h2>
+            <p class="text-xs text-slate-500 mt-1 mb-6">Masukkan kata sandi untuk mengakses Dashboard Pendataan Warga</p>
+
+            <form onsubmit="handleLogin(event)" class="space-y-4">
+                <div class="relative">
+                    <input type="password" id="password-input" placeholder="Masukkan Kata Sandi" required
+                        class="w-full pl-10 pr-10 py-3 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 transition font-mono tracking-widest text-center">
+                    <i class="fa-solid fa-key absolute left-3.5 top-3.5 text-slate-400"></i>
+                    <button type="button" onclick="togglePasswordVisibility()" class="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600 focus:outline-none">
+                        <i id="password-toggle-icon" class="fa-solid fa-eye"></i>
+                    </button>
+                </div>
+                
+                <div id="login-error" class="text-xs text-rose-500 font-medium hidden flex items-center justify-center space-x-1">
+                    <i class="fa-solid fa-circle-exclamation"></i>
+                    <span id="login-error-text">Kata sandi salah! Silakan coba lagi.</span>
+                </div>
+
+                <button type="submit" class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-semibold rounded-xl text-sm transition shadow-lg shadow-indigo-600/25 flex items-center justify-center space-x-2">
+                    <span id="login-submit-text">Buka Akses</span>
+                    <i class="fa-solid fa-arrow-right text-xs"></i>
+                </button>
+            </form>
+            <p class="text-[11px] text-slate-400 mt-6">Sistem Informasi Data Pemilih RT 001 - 036</p>
+        </div>
+    </div>
+
+    <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-40 hidden md:hidden transition-opacity"></div>
+
+    <div id="app-container" class="flex flex-1 overflow-hidden hidden">
+        <!-- Sidebar -->
+        <aside id="sidebar" class="fixed md:static inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white flex flex-col transition-all duration-300 transform -translate-x-full md:translate-x-0 shrink-0 shadow-xl overflow-y-auto">
+            <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+                <div class="flex items-center space-x-3 overflow-hidden">
+                    <div class="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center shrink-0 shadow-lg shadow-indigo-600/30">
+                        <i class="fa-solid fa-users-rectangle text-xl text-white"></i>
+                    </div>
+                    <div class="truncate">
+                        <h1 class="font-bold text-base tracking-wide text-white leading-tight truncate">Data Pemilih</h1>
+                        <p class="text-xs text-indigo-400 font-medium truncate">RT 001 - 036</p>
+                    </div>
+                </div>
+                <button onclick="toggleSidebar()" class="md:hidden text-slate-400 hover:text-white p-1">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+
+            <nav class="flex-1 p-4 space-y-1.5">
+                <button id="nav-chart" onclick="switchView('chart')" class="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg bg-indigo-600 text-white font-medium text-sm transition">
+                    <i class="fa-solid fa-chart-pie w-5 text-center"></i>
+                    <span>Grafik & Statistik</span>
+                </button>
+                <button id="nav-table" onclick="switchView('table')" class="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white font-medium text-sm transition">
+                    <i class="fa-solid fa-users-viewfinder w-5 text-center text-indigo-400"></i>
+                    <span>Data Warga & Pemilih</span>
+                </button>
+                <button id="nav-rincian" onclick="switchView('rincian')" class="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white font-medium text-sm transition">
+                    <i class="fa-solid fa-clipboard-list w-5 text-center text-amber-400"></i>
+                    <span>Rincian Pemilih</span>
+                </button>
+                <button onclick="openAddWargaModal()" class="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white font-medium text-sm transition">
+                    <i class="fa-solid fa-user-plus w-5 text-center text-emerald-400"></i>
+                    <span>Tambah Data Warga</span>
+                </button>
+            </nav>
+
+            <div class="p-4 border-t border-slate-800 space-y-2">
+                <button onclick="clearAppCache()" class="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500 hover:text-slate-900 font-medium text-xs transition border border-amber-500/20">
+                    <i class="fa-solid fa-trash-can"></i>
+                    <span>Bersihkan Cache Lokal</span>
+                </button>
+                <button onclick="handleLogout()" class="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-lg bg-rose-600/20 text-rose-300 hover:bg-rose-600 hover:text-white font-medium text-xs transition">
+                    <i class="fa-solid fa-right-from-bracket"></i>
+                    <span>Kunci Aplikasi</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <div class="flex-1 flex flex-col min-w-0 overflow-y-auto">
+            <header class="bg-white border-b border-slate-200 sticky top-0 z-30 px-4 py-3 sm:px-6 flex items-center justify-between shadow-sm">
+                <div class="flex items-center space-x-3">
+                    <button onclick="toggleSidebar()" class="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition" title="Buka/Sembunyikan Sidebar">
+                        <i class="fa-solid fa-bars text-lg"></i>
+                    </button>
+                    <div>
+                        <h2 id="header-title" class="text-lg font-bold text-slate-800">Grafik & Statistik Pendataan Warga</h2>
+                    </div>
+                </div>
+
+                <div class="flex items-center space-x-2">
+                    <!-- Indikator Cache -->
+                    <div id="cache-status-badge" class="hidden sm:flex items-center bg-amber-50 text-amber-800 border border-amber-200 px-2.5 py-1.5 rounded-lg text-xs font-semibold cursor-help" title="Status Cache Lokal">
+                        <i class="fa-solid fa-bolt text-amber-500 mr-1.5"></i>
+                        <span id="cache-time-text">Cache Aktif</span>
+                    </div>
+
+                    <button onclick="fetchDataFromSheet(true)" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-2 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition border border-indigo-200" title="Paksa Sinkronisasi Ulang dari Server">
+                        <i class="fa-solid fa-rotate text-indigo-600"></i>
+                        <span class="hidden sm:inline">Sinkronkan Data</span>
+                    </button>
+                    <button onclick="openAddWargaModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-sm transition">
+                        <i class="fa-solid fa-plus"></i>
+                        <span class="hidden sm:inline">Tambah Data</span>
+                    </button>
+                    <button onclick="handleLogout()" title="Kunci Kembali" class="bg-rose-50 hover:bg-rose-100 text-rose-600 p-2 rounded-lg text-xs transition">
+                        <i class="fa-solid fa-lock"></i>
+                    </button>
+                </div>
+            </header>
+
+            <main class="p-4 sm:p-6 space-y-6 flex-1">
+                <div id="view-chart" class="space-y-6">
+                    <!-- Summary Cards -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p class="text-xs font-medium text-slate-500">Total Warga</p>
+                                <h3 id="stat-total" class="text-2xl font-extrabold text-slate-800 mt-1">0</h3>
+                            </div>
+                            <div class="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                                <i class="fa-solid fa-users text-lg"></i>
+                            </div>
+                        </div>
+                        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p class="text-xs font-medium text-slate-500">Jumlah Pemilih</p>
+                                <h3 id="stat-pemilih" class="text-2xl font-extrabold text-emerald-600 mt-1">0</h3>
+                            </div>
+                            <div class="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                                <i class="fa-solid fa-user-check text-lg"></i>
+                            </div>
+                        </div>
+                        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p class="text-xs font-medium text-slate-500">Bukan Pemilih</p>
+                                <h3 id="stat-bukan" class="text-2xl font-extrabold text-rose-600 mt-1">0</h3>
+                            </div>
+                            <div class="w-10 h-10 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                                <i class="fa-solid fa-user-xmark text-lg"></i>
+                            </div>
+                        </div>
+                        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p class="text-xs font-medium text-slate-500">Jumlah NKK</p>
+                                <h3 id="stat-kk" class="text-2xl font-extrabold text-indigo-600 mt-1">0</h3>
+                            </div>
+                            <div class="w-10 h-10 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                                <i class="fa-solid fa-address-card text-lg"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="space-y-6">
+                        <!-- Chart: Status Hak Pilih per RT -->
+                        <div class="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 shadow-sm">
+                            <h4 class="text-sm font-bold text-slate-800 mb-3 flex items-center justify-between">
+                                <span class="flex items-center"><i class="fa-solid fa-chart-column text-indigo-500 mr-2"></i> Status Hak Pilih per RT (RT 001 - RT 036)</span>
+                                <span class="text-xs text-slate-500 font-normal">36 RT</span>
+                            </h4>
+                            <div class="h-64 sm:h-72 relative"><canvas id="chartPemilih"></canvas></div>
+                        </div>
+
+                        <!-- GRAFIK BATANG KETERANGAN DATA WARGA DAN PEMILIH -->
+                        <div class="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 shadow-sm">
+                            <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-3 gap-2">
+                                <h4 class="text-sm font-bold text-slate-800 flex items-center">
+                                    <i class="fa-solid fa-chart-bar text-purple-600 mr-2"></i> Grafik Batang Keterangan Data Warga & Status Pemilih
+                                </h4>
+                                <div class="flex items-center space-x-3 text-xs">
+                                    <span class="flex items-center font-medium text-emerald-700">
+                                        <span class="w-3 h-3 inline-block rounded-sm bg-emerald-500 mr-1.5"></span> Pemilih
+                                    </span>
+                                    <span class="flex items-center font-medium text-rose-700">
+                                        <span class="w-3 h-3 inline-block rounded-sm bg-rose-500 mr-1.5"></span> Bukan Pemilih
+                                    </span>
+                                </div>
+                            </div>
+                            <p class="text-xs text-slate-500 mb-4">Grafik rincian kategori keterangan warga vertikal beserta perincian status pemilih dan jumlah angka otomatis di atas batang.</p>
+                            <div class="min-h-[300px] h-72 sm:h-80 relative">
+                                <canvas id="chartKeterangan"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Secondary Charts Grid -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 shadow-sm">
+                                <h4 class="text-sm font-bold text-slate-800 mb-3 flex items-center"><i class="fa-solid fa-venus-mars text-blue-500 mr-2"></i> Jenis Kelamin</h4>
+                                <div class="h-56 relative"><canvas id="chartGender"></canvas></div>
+                            </div>
+                            <div class="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 shadow-sm">
+                                <h4 class="text-sm font-bold text-slate-800 mb-3 flex items-center"><i class="fa-solid fa-cake-candles text-amber-500 mr-2"></i> Distribusi Umur</h4>
+                                <div class="h-56 relative"><canvas id="chartUmur"></canvas></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="view-table" class="space-y-6 hidden">
+                    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                        <!-- Table Header Actions -->
+                        <div class="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+                            <div>
+                                <h3 class="font-bold text-slate-800 text-sm flex items-center">
+                                    <i class="fa-solid fa-users-viewfinder text-indigo-600 mr-2"></i>
+                                    Daftar Warga & Pemilih
+                                </h3>
+                                <p class="text-xs text-slate-500 mt-0.5">Kelola data warga, penetapan hak pilih, serta ekspor dokumen PDF.</p>
+                            </div>
+                            <div class="flex items-center space-x-2 w-full sm:w-auto justify-end">
+                                <button onclick="exportDataToPDF()" class="py-2 px-3.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-semibold rounded-lg transition flex items-center space-x-1.5 shadow-sm">
+                                    <i class="fa-solid fa-file-pdf"></i>
+                                    <span>Ekspor Data Warga (PDF)</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Filter Bar -->
+                        <div class="p-4 bg-slate-100/70 border-b border-slate-200 gap-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6">
+                            <div class="relative">
+                                <i class="fa-solid fa-magnifying-glass absolute left-3 top-3 text-slate-400 text-xs"></i>
+                                <input type="text" id="search-input" onkeyup="filterData()" placeholder="Cari Nama, NIK, No. KK..." 
+                                    class="w-full pl-9 pr-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <select id="filter-status" onchange="filterData()" class="w-full py-2 px-3 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <option value="ALL">-- Semua Status Pemilih --</option>
+                                    <option value="Pemilih">Pemilih</option>
+                                    <option value="Bukan Pemilih">Bukan Pemilih</option>
+                                </select>
+                            </div>
+                            <div class="relative" id="ms-ket-wrap">
+                                <button type="button" id="ms-ket-btn" onclick="toggleMultiSelect('ket')" class="w-full py-2 px-3 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 flex items-center justify-between text-left">
+                                    <span id="ms-ket-label" class="truncate">-- Semua Keterangan --</span>
+                                    <i class="fa-solid fa-chevron-down text-[10px] text-slate-400 ml-2 shrink-0"></i>
+                                </button>
+                                <div id="ms-ket-panel" class="hidden absolute z-30 mt-1 left-0 w-full min-w-[230px] bg-white border border-slate-300 rounded-lg shadow-xl">
+                                    <div class="p-2 border-b border-slate-200 space-y-1.5">
+                                        <input type="text" id="ms-ket-search" oninput="msSearch('ket')" placeholder="Cari keterangan..." class="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                        <div class="flex items-center justify-between text-[11px] font-semibold">
+                                            <button type="button" onclick="msSelectAll('ket')" class="text-indigo-600 hover:underline">Pilih Semua</button>
+                                            <button type="button" onclick="msClear('ket')" class="text-rose-600 hover:underline">Hapus Pilihan</button>
+                                        </div>
+                                    </div>
+                                    <div id="ms-ket-list" class="max-h-56 overflow-y-auto p-1"></div>
+                                </div>
+                            </div>
+                            <div class="relative" id="ms-rt-wrap">
+                                <button type="button" id="ms-rt-btn" onclick="toggleMultiSelect('rt')" class="w-full py-2 px-3 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 flex items-center justify-between text-left">
+                                    <span id="ms-rt-label" class="truncate">-- Semua RT (36 RT) --</span>
+                                    <i class="fa-solid fa-chevron-down text-[10px] text-slate-400 ml-2 shrink-0"></i>
+                                </button>
+                                <div id="ms-rt-panel" class="hidden absolute z-30 mt-1 left-0 w-full min-w-[230px] bg-white border border-slate-300 rounded-lg shadow-xl">
+                                    <div class="p-2 border-b border-slate-200 space-y-1.5">
+                                        <input type="text" id="ms-rt-search" oninput="msSearch('rt')" placeholder="Cari RT..." class="w-full px-2 py-1.5 text-xs border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                        <div class="flex items-center justify-between text-[11px] font-semibold">
+                                            <button type="button" onclick="msSelectAll('rt')" class="text-indigo-600 hover:underline">Pilih Semua</button>
+                                            <button type="button" onclick="msClear('rt')" class="text-rose-600 hover:underline">Hapus Pilihan</button>
+                                        </div>
+                                    </div>
+                                    <div id="ms-rt-list" class="max-h-56 overflow-y-auto p-1"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <select id="filter-tps" onchange="filterData()" class="w-full py-2 px-3 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <option value="ALL">-- Semua TPS --</option>
+                                    <option value="01">TPS 01</option>
+                                    <option value="02">TPS 02</option>
+                                </select>
+                            </div>
+                            <div>
+                                <button onclick="resetFilters()" class="w-full py-2 px-3 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold rounded-lg transition flex items-center justify-center space-x-1">
+                                    <i class="fa-solid fa-rotate-left"></i><span>Reset Filter</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="overflow-x-auto min-h-[350px]">
+                            <table class="w-full text-xs text-left text-slate-600">
+                                <thead class="bg-slate-900 text-white uppercase font-bold text-[11px] tracking-wider border-b-2 border-slate-950">
+                                    <tr>
+                                        <th class="px-3 py-3 text-center w-12">NO</th>
+                                        <th class="px-3 py-3 text-left">KK</th>
+                                        <th class="px-3 py-3 text-left">NIK</th>
+                                        <th class="px-3 py-3 text-left">NAMA LENGKAP</th>
+                                        <th class="px-3 py-3 text-left">TEMPAT LAHIR</th>
+                                        <th class="px-3 py-3 text-center">TANGGAL LAHIR</th>
+                                        <th class="px-3 py-3 text-center">UMUR</th>
+                                        <th class="px-3 py-3 text-center">JK</th>
+                                        <th class="px-3 py-3 text-center">RT</th>
+                                        <th class="px-3 py-3 text-center">TPS</th>
+                                        <th class="px-4 py-3 text-center min-w-[150px]">STATUS HAK PILIH</th>
+                                        <th class="px-4 py-3 text-left min-w-[200px]">KETERANGAN</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="table-body"></tbody>
+                            </table>
+                        </div>
+
+                        <div class="px-4 py-3 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                            <div class="text-slate-500" id="pagination-info">
+                                Menampilkan <span class="font-semibold text-slate-800" id="page-start">0</span> - <span class="font-semibold text-slate-800" id="page-end">0</span> dari <span class="font-semibold text-slate-800" id="total-items">0</span> data
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <span class="text-slate-500">Tampilkan:</span>
+                                <select id="items-per-page" onchange="changeItemsPerPage()" class="border border-slate-300 rounded px-2 py-1 text-xs bg-white font-medium">
+                                    <option value="10">10</option>
+                                    <option value="25" selected>25</option>
+                                    <option value="50">50</option>
+                                    <option value="100">100</option>
+                                </select>
+                                <div class="flex space-x-1 pl-2" id="pagination-buttons"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="view-rincian" class="space-y-6 hidden">
+                    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+                        <div>
+                            <h3 class="font-bold text-slate-800 text-sm flex items-center">
+                                <i class="fa-solid fa-clipboard-list text-amber-500 mr-2"></i>
+                                Tabel Rincian Pemilih per TPS (TPS 01 & TPS 02)
+                            </h3>
+                            <p class="text-xs text-slate-500 mt-0.5">Rekapitulasi jumlah warga per kategori Keterangan dan RT untuk TPS 01 & TPS 02.</p>
+                        </div>
+                        <div class="flex flex-wrap items-center space-x-2 w-full sm:w-auto">
+                            <select id="rincian-filter-tps" onchange="renderRincianPemilih()" class="py-2 px-3 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold text-slate-700">
+                                <option value="ALL">-- Semua TPS (TPS 01 & TPS 02) --</option>
+                                <option value="01">TPS 01</option>
+                                <option value="02">TPS 02</option>
+                            </select>
+                            <select id="rincian-filter-status" onchange="renderRincianPemilih()" class="py-2 px-3 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option value="ALL">-- Semua Status Pemilih --</option>
+                                <option value="Pemilih">Khusus Pemilih</option>
+                                <option value="Bukan Pemilih">Khusus Bukan Pemilih</option>
+                            </select>
+                            <input type="text" id="rincian-search" onkeyup="renderRincianPemilih()" placeholder="Cari Keterangan..." class="py-2 px-3 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <button onclick="exportRincianToPDF()" class="py-2 px-3 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-semibold rounded-lg transition flex items-center space-x-1.5 shadow-sm">
+                                <i class="fa-solid fa-file-pdf"></i>
+                                <span>Download PDF (Landscape)</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Container Tabel TPS 01 dan TPS 02 -->
+                    <div id="rincian-tables-container" class="space-y-6"></div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <div id="modal-add" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200 flex flex-col max-h-[90vh]">
+            <div class="bg-slate-900 text-white px-5 py-3.5 flex items-center justify-between">
+                <h3 class="font-bold text-sm flex items-center"><i class="fa-solid fa-user-plus text-indigo-400 mr-2"></i> Tambah Data Warga Baru</h3>
+                <button onclick="closeAddWargaModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+            <form id="form-tambah-warga" onsubmit="saveWarga(event)" class="p-5 overflow-y-auto space-y-3 text-xs">
+                <div>
+                    <label class="block font-semibold text-slate-700 mb-1">Nomor Kartu Keluarga (KK)</label>
+                    <input type="text" id="add-kk" maxlength="16" required placeholder="16 Digit Nomor KK" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 font-mono">
+                </div>
+                <div>
+                    <label class="block font-semibold text-slate-700 mb-1">Nomor Induk Kependudukan (NIK)</label>
+                    <input type="text" id="add-nik" maxlength="16" required placeholder="16 Digit NIK" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 font-mono">
+                </div>
+                <div>
+                    <label class="block font-semibold text-slate-700 mb-1">Nama Lengkap</label>
+                    <input type="text" id="add-nama" required placeholder="Nama Lengkap Warga" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-semibold text-slate-700 mb-1">Tempat Lahir</label>
+                        <input type="text" id="add-tempat" required placeholder="Kota Lahir" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-700 mb-1">Tanggal Lahir</label>
+                        <input type="date" id="add-tanggal" required class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                </div>
+                <div class="grid grid-cols-3 gap-3">
+                    <div>
+                        <label class="block font-semibold text-slate-700 mb-1">Jenis Kelamin</label>
+                        <select id="add-jk" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                            <option value="L">Laki-Laki (L)</option>
+                            <option value="P">Perempuan (P)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-700 mb-1">RT</label>
+                        <select id="add-rt" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500"></select>
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-700 mb-1">TPS</label>
+                        <select id="add-tps" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                            <option value="01">TPS 01</option>
+                            <option value="02">TPS 02</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block font-semibold text-slate-700 mb-1">Status Hak Pilih Awal</label>
+                    <select id="add-status" onchange="toggleAddKeteranganField()" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                        <option value="Pemilih">Pemilih</option>
+                        <option value="Bukan Pemilih" selected>Bukan Pemilih</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block font-semibold text-slate-700 mb-1">Keterangan</label>
+                    <input type="text" id="add-keterangan" disabled placeholder="Aktif bila status Pemilih" class="w-full px-3 py-2 border border-slate-300 rounded-lg bg-slate-100 text-slate-400 focus:ring-2 focus:ring-indigo-500 cursor-not-allowed">
+                </div>
+                <div class="pt-3 flex justify-end space-x-2 border-t border-slate-200 mt-4">
+                    <button type="button" onclick="closeAddWargaModal()" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-semibold">Batal</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-md">Simpan Data</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-delete" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-xl shadow-2xl max-w-sm w-full p-5 border border-slate-200 text-center">
+            <div class="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-3">
+                <i class="fa-solid fa-trash-can text-xl"></i>
+            </div>
+            <h3 class="text-base font-bold text-slate-800">Hapus Data Warga</h3>
+            <p class="text-xs text-slate-500 mt-1 mb-5">Apakah Anda yakin ingin menghapus data <strong id="delete-warga-name" class="text-slate-800 font-semibold"></strong>? Bar chart dan statistik akan diperbarui secara otomatis.</p>
+            <div class="flex space-x-2">
+                <button onclick="closeDeleteModal()" class="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs transition">Batal</button>
+                <button onclick="confirmDeleteWarga()" class="flex-1 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-lg text-xs shadow-md transition">Hapus</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="fixed bottom-5 right-5 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none">
+        <div class="bg-slate-900 text-white px-4 py-3 rounded-xl shadow-xl flex items-center space-x-3 text-xs border border-slate-700">
+            <i id="toast-icon" class="fa-solid fa-circle-check text-emerald-400 text-base"></i>
+            <span id="toast-message" class="font-medium">Notifikasi</span>
+        </div>
+    </div>
+
+    <script>
+        let dataWarga = [];
+        let activeView = 'chart';
+        let currentPage = 1;
+        let itemsPerPage = 25;
+        let filteredData = [];
+        let deleteTargetId = null;
+
+        let chartPemilihInstance = null;
+        let chartGenderInstance = null;
+        let chartUmurInstance = null;
+        let chartKeteranganInstance = null;
+
+        // =========================================
+        // FUNGSI CACHE LOCALSTORAGE IMPLEMENTATION
+        // =========================================
+        function saveCacheData(data) {
+            try {
+                localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+                localStorage.setItem(CACHE_TIME_KEY, new Date().getTime().toString());
+                updateCacheBadge();
+            } catch (e) {
+                console.warn("Gagal menyimpan data ke cache lokal:", e);
+            }
+        }
+
+        function loadCacheData() {
+            try {
+                const cachedStr = localStorage.getItem(CACHE_KEY);
+                if (cachedStr) {
+                    const parsed = JSON.parse(cachedStr);
+                    if (Array.isArray(parsed)) return parsed;
+                }
+            } catch (e) {
+                console.warn("Gagal membaca cache lokal:", e);
+            }
+            return null;
+        }
+
+        function getCacheTimestamp() {
+            return localStorage.getItem(CACHE_TIME_KEY);
+        }
+
+        function updateCacheBadge() {
+            const badgeEl = document.getElementById('cache-status-badge');
+            const textEl = document.getElementById('cache-time-text');
+            const timestamp = getCacheTimestamp();
+
+            if (!badgeEl || !textEl) return;
+
+            if (timestamp) {
+                const date = new Date(parseInt(timestamp, 10));
+                const hoursStr = String(date.getHours()).padStart(2, '0');
+                const minsStr = String(date.getMinutes()).padStart(2, '0');
+                textEl.innerText = `Cache: ${hoursStr}:${minsStr}`;
+                badgeEl.title = `Data diambil dari cache lokal (${date.toLocaleString('id-ID')})`;
+                badgeEl.classList.remove('hidden');
+            } else {
+                badgeEl.classList.add('hidden');
+            }
+        }
+
+        function clearAppCache() {
+            localStorage.removeItem(CACHE_KEY);
+            localStorage.removeItem(CACHE_TIME_KEY);
+            updateCacheBadge();
+            showToast("🧹 Cache lokal berhasil dibersihkan.");
+            fetchDataFromSheet(true);
+        }
+
+        window.onload = function() {
+            if (getAuthToken()) {
+                unlockApplication();
+            } else {
+                document.getElementById('password-input')?.focus();
+            }
+        };
+
+        async function handleLogin(event) {
+            event.preventDefault();
+            const input = document.getElementById('password-input');
+            const errorMsg = document.getElementById('login-error');
+            const errorText = document.getElementById('login-error-text');
+            const loginCard = document.getElementById('login-card');
+            const btn = event.target.querySelector('button[type="submit"]');
+            const btnText = document.getElementById('login-submit-text');
+
+            if (!input) return;
+
+            const showError = (msg) => {
+                if (errorText) errorText.textContent = msg;
+                if (errorMsg) errorMsg.classList.remove('hidden');
+                if (loginCard) {
+                    loginCard.classList.remove('animate-shake');
+                    void loginCard.offsetWidth;
+                    loginCard.classList.add('animate-shake');
+                }
+                input.value = '';
+                input.focus();
+            };
+
+            if (!apiReady()) {
+                showError("URL Apps Script belum disetel di index.html.");
+                return;
+            }
+
+            if (btn) btn.disabled = true;
+            if (btnText) btnText.textContent = "Memeriksa...";
+            if (errorMsg) errorMsg.classList.add('hidden');
+
+            try {
+                const json = await apiRequest("login", { password: input.value.trim() });
+                if (json.status === "success" && json.token) {
+                    setAuthToken(json.token);
+                    input.value = '';
+                    unlockApplication();
+                    showToast("Selamat datang! Akses berhasil dibuka.");
+                } else {
+                    showError(json.message || "Kata sandi salah! Silakan coba lagi.");
+                }
+            } catch (err) {
+                console.error("Login gagal:", err);
+                showError("Tidak dapat terhubung ke server. Periksa koneksi atau URL Apps Script.");
+            } finally {
+                if (btn) btn.disabled = false;
+                if (btnText) btnText.textContent = "Buka Akses";
+            }
+        }
+
+        function togglePasswordVisibility() {
+            const input = document.getElementById('password-input');
+            const icon = document.getElementById('password-toggle-icon');
+            if (!input || !icon) return;
+
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.classList.remove('fa-eye');
+                icon.classList.add('fa-eye-slash');
+            } else {
+                input.type = 'password';
+                icon.classList.remove('fa-eye-slash');
+                icon.classList.add('fa-eye');
+            }
+        }
+
+        function unlockApplication() {
+            const overlay = document.getElementById('login-overlay');
+            const appContainer = document.getElementById('app-container');
+
+            if (overlay) overlay.classList.add('opacity-0', 'pointer-events-none');
+            setTimeout(() => {
+                if (overlay) overlay.classList.add('hidden');
+            }, 500);
+
+            if (appContainer) appContainer.classList.remove('hidden');
+            document.body.classList.remove('overflow-hidden');
+
+            populateRtOptions();
+            initCharts();
+            fetchDataFromSheet(false); // Caching Stale-While-Revalidate strategy
+        }
+
+        function lockApplication(message) {
+            const overlay = document.getElementById('login-overlay');
+            const appContainer = document.getElementById('app-container');
+            const passwordInput = document.getElementById('password-input');
+            const errorMsg = document.getElementById('login-error');
+
+            // Hapus token & data warga dari memori/penyimpanan browser
+            setAuthToken('');
+            try {
+                localStorage.removeItem(CACHE_KEY);
+                localStorage.removeItem(CACHE_TIME_KEY);
+            } catch (e) {}
+            dataWarga = [];
+            filteredData = [];
+
+            if (passwordInput) passwordInput.value = '';
+            if (errorMsg) errorMsg.classList.add('hidden');
+
+            if (appContainer) appContainer.classList.add('hidden');
+            if (overlay) {
+                overlay.classList.remove('hidden');
+                setTimeout(() => {
+                    overlay.classList.remove('opacity-0', 'pointer-events-none');
+                }, 10);
+            }
+            document.body.classList.add('overflow-hidden');
+            if (message) showToast(message);
+        }
+
+        function handleLogout() {
+            if (apiReady() && getAuthToken()) {
+                apiRequest("logout").catch(() => {}); // cabut token di server (abaikan bila gagal)
+            }
+            lockApplication("Aplikasi berhasil dikunci kembali.");
+        }
+
+        function handleSessionExpired() {
+            lockApplication("Sesi berakhir. Silakan login kembali.");
+        }
+
+        function populateRtOptions() {
+            const addRtSelect = document.getElementById('add-rt');
+            let optionsHtml = '';
+            const rtOpts = [];
+            for (let i = 1; i <= 36; i++) {
+                const rtNum = String(i).padStart(3, '0');
+                optionsHtml += `<option value="${rtNum}">RT ${rtNum}</option>`;
+                rtOpts.push({ value: rtNum, label: `RT ${rtNum}` });
+            }
+            if (addRtSelect) addRtSelect.innerHTML = optionsHtml;
+            renderMultiSelect('rt', rtOpts);
+        }
+
+        /* ===== Multi-select checkbox filter (RT & Keterangan) ===== */
+        const msState = { rt: new Set(), ket: new Set() };
+        const msOptions = { rt: [], ket: [] };
+        const msAllLabel = { rt: '-- Semua RT (36 RT) --', ket: '-- Semua Keterangan --' };
+        const msNoun = { rt: 'RT', ket: 'keterangan' };
+
+        function renderMultiSelect(type, options) {
+            msOptions[type] = options;
+            // buang pilihan yang sudah tidak ada pada daftar opsi
+            const valid = new Set(options.map(o => o.value));
+            [...msState[type]].forEach(v => { if (!valid.has(v)) msState[type].delete(v); });
+
+            const list = document.getElementById(`ms-${type}-list`);
+            if (!list) return;
+            list.innerHTML = options.map(o => `
+                <label class="ms-item flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-100 cursor-pointer text-xs text-slate-700" data-text="${escapeHtml(o.label.toLowerCase())}">
+                    <input type="checkbox" class="accent-indigo-600 w-3.5 h-3.5 shrink-0" value="${escapeHtml(o.value)}" ${msState[type].has(o.value) ? 'checked' : ''} onchange="onMsChange('${type}', this)">
+                    <span class="break-words">${escapeHtml(o.label)}</span>
+                </label>`).join('');
+            updateMsLabel(type);
+        }
+
+        function toggleMultiSelect(type) {
+            const other = type === 'rt' ? 'ket' : 'rt';
+            document.getElementById(`ms-${other}-panel`)?.classList.add('hidden');
+            document.getElementById(`ms-${type}-panel`)?.classList.toggle('hidden');
+        }
+
+        function onMsChange(type, cb) {
+            if (cb.checked) msState[type].add(cb.value); else msState[type].delete(cb.value);
+            updateMsLabel(type);
+            filterData();
+        }
+
+        function msSelectAll(type) {
+            // pilih semua opsi yang sedang tampil (mengikuti kotak pencarian)
+            document.querySelectorAll(`#ms-${type}-list .ms-item`).forEach(el => {
+                if (el.classList.contains('hidden')) return;
+                const cb = el.querySelector('input');
+                cb.checked = true;
+                msState[type].add(cb.value);
+            });
+            updateMsLabel(type);
+            filterData();
+        }
+
+        function msClear(type) {
+            msState[type].clear();
+            document.querySelectorAll(`#ms-${type}-list input`).forEach(cb => cb.checked = false);
+            updateMsLabel(type);
+            filterData();
+        }
+
+        function msSearch(type) {
+            const q = (document.getElementById(`ms-${type}-search`)?.value || '').toLowerCase().trim();
+            document.querySelectorAll(`#ms-${type}-list .ms-item`).forEach(el => {
+                el.classList.toggle('hidden', q !== '' && !el.dataset.text.includes(q));
+            });
+        }
+
+        function updateMsLabel(type) {
+            const el = document.getElementById(`ms-${type}-label`);
+            if (!el) return;
+            const n = msState[type].size;
+            if (n === 0) {
+                el.textContent = msAllLabel[type];
+                el.classList.remove('font-semibold', 'text-indigo-700');
+                return;
+            }
+            const labels = msOptions[type].filter(o => msState[type].has(o.value)).map(o => o.label);
+            el.textContent = (n <= 2 && type === 'rt') || n === 1 ? labels.join(', ') : `${n} ${msNoun[type]} dipilih`;
+            el.classList.add('font-semibold', 'text-indigo-700');
+        }
+
+        function resetMultiSelects() {
+            ['rt', 'ket'].forEach(t => {
+                msState[t].clear();
+                document.querySelectorAll(`#ms-${t}-list input`).forEach(cb => cb.checked = false);
+                const q = document.getElementById(`ms-${t}-search`);
+                if (q) { q.value = ''; msSearch(t); }
+                updateMsLabel(t);
+            });
+        }
+
+        document.addEventListener('click', (e) => {
+            ['rt', 'ket'].forEach(t => {
+                const wrap = document.getElementById(`ms-${t}-wrap`);
+                if (wrap && !wrap.contains(e.target)) document.getElementById(`ms-${t}-panel`)?.classList.add('hidden');
+            });
+        });
+
+        function switchView(view) {
+            activeView = view;
+            const viewChart = document.getElementById('view-chart');
+            const viewTable = document.getElementById('view-table');
+            const viewRincian = document.getElementById('view-rincian');
+            const navChart = document.getElementById('nav-chart');
+            const navTable = document.getElementById('nav-table');
+            const navRincian = document.getElementById('nav-rincian');
+            const headerTitle = document.getElementById('header-title');
+
+            [navChart, navTable, navRincian].forEach(nav => {
+                if (nav) {
+                    nav.classList.remove('bg-indigo-600', 'text-white');
+                    nav.classList.add('text-slate-300', 'hover:bg-slate-800');
+                }
+            });
+
+            if (view === 'chart') {
+                viewChart?.classList.remove('hidden');
+                viewTable?.classList.add('hidden');
+                viewRincian?.classList.add('hidden');
+                navChart?.classList.add('bg-indigo-600', 'text-white');
+                navChart?.classList.remove('text-slate-300', 'hover:bg-slate-800');
+                if (headerTitle) headerTitle.innerText = "Grafik & Statistik Pendataan Warga";
+                setTimeout(() => {
+                    if (chartPemilihInstance) chartPemilihInstance.resize();
+                    if (chartGenderInstance) chartGenderInstance.resize();
+                    if (chartUmurInstance) chartUmurInstance.resize();
+                    if (chartKeteranganInstance) chartKeteranganInstance.resize();
+                }, 50);
+            } else if (view === 'table') {
+                viewChart?.classList.add('hidden');
+                viewTable?.classList.remove('hidden');
+                viewRincian?.classList.add('hidden');
+                navTable?.classList.add('bg-indigo-600', 'text-white');
+                navTable?.classList.remove('text-slate-300', 'hover:bg-slate-800');
+                if (headerTitle) headerTitle.innerText = "Daftar Pemilih & Data Warga";
+            } else if (view === 'rincian') {
+                viewChart?.classList.add('hidden');
+                viewTable?.classList.add('hidden');
+                viewRincian?.classList.remove('hidden');
+                navRincian?.classList.add('bg-indigo-600', 'text-white');
+                navRincian?.classList.remove('text-slate-300', 'hover:bg-slate-800');
+                if (headerTitle) headerTitle.innerText = "Rincian Data Pemilih & Keterangan per RT";
+                renderRincianPemilih();
+            }
+        }
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const backdrop = document.getElementById('sidebar-backdrop');
+            if (!sidebar) return;
+
+            const isMobile = window.innerWidth < 768;
+
+            if (isMobile) {
+                sidebar.classList.toggle('-translate-x-full');
+                if (backdrop) backdrop.classList.toggle('hidden');
+            } else {
+                sidebar.classList.toggle('md:-ml-64');
+                setTimeout(() => {
+                    if (chartPemilihInstance) chartPemilihInstance.resize();
+                    if (chartGenderInstance) chartGenderInstance.resize();
+                    if (chartUmurInstance) chartUmurInstance.resize();
+                    if (chartKeteranganInstance) chartKeteranganInstance.resize();
+                }, 305);
+            }
+        }
+
+        function formatDateIndo(dateStr) {
+            if (!dateStr || dateStr === '-') return '-';
+            try {
+                let str = String(dateStr).trim();
+                if (str.includes('T')) {
+                    str = str.split('T')[0];
+                }
+                
+                const parts = str.split(/[-/]/);
+                if (parts.length === 3) {
+                    if (parts[0].length === 4) {
+                        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+                    } else if (parts[2].length === 4) {
+                        return `${parts[0]}/${parts[1]}/${parts[2]}`;
+                    }
+                }
+                return dateStr;
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function calculateAge(birthDateStr) {
+            if (!birthDateStr || birthDateStr === '-') return 0;
+            try {
+                let str = String(birthDateStr).trim();
+                let birth;
+                
+                if (str.includes('T')) {
+                    str = str.split('T')[0];
+                }
+                
+                const parts = str.split(/[-/]/);
+                
+                if (parts.length === 3) {
+                    if (parts[0].length === 4) {
+                        birth = new Date(parts[0], parseInt(parts[1]) - 1, parts[2]);
+                    } else if (parts[2].length === 4) {
+                        birth = new Date(parts[2], parseInt(parts[1]) - 1, parts[0]);
+                    } else {
+                        birth = new Date(str);
+                    }
+                } else {
+                    birth = new Date(str);
+                }
+
+                if (isNaN(birth.getTime())) return 0;
+
+                const now = new Date();
+                let age = now.getFullYear() - birth.getFullYear();
+                const monthDiff = now.getMonth() - birth.getMonth();
+                
+                if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birth.getDate())) {
+                    age--;
+                }
+                
+                return age < 0 ? 0 : age;
+            } catch(e) {
+                return 0;
+            }
+        }
+
+        const getUsiaSafe = (warga) => {
+            if (warga.usia !== undefined && warga.usia !== null && String(warga.usia).trim() !== '') {
+                return parseInt(warga.usia, 10);
+            }
+            return calculateAge(warga.tanggalLahir);
+        };
+
+        async function fetchDataFromSheet(forceRefresh = false) {
+            if (!apiReady()) {
+                showToast("URL Apps Script belum disetel!");
+                return;
+            }
+
+            let cacheLoaded = false;
+            const cachedData = loadCacheData();
+
+            // 1. TAMPILKAN DARI CACHE DENGAN CEPAT (0ms Delay)
+            if (cachedData && cachedData.length > 0 && !forceRefresh) {
+                dataWarga = cachedData;
+                populateKeteranganOptions();
+                filterData();
+                updateCacheBadge();
+                showToast("⚡ Memuat data cepat dari cache lokal");
+                cacheLoaded = true;
+            }
+
+            // Status Notifikasi Loading
+            if (forceRefresh || !cacheLoaded) {
+                showToast("🔄 Mensinkronkan data dari Google Sheet...");
+            }
+
+            // 2. AMBIL DATA TERBARU DI LATAR BELAKANG (Stale-While-Revalidate)
+            try {
+                const json = await apiRequest("get");
+
+                if (json.status === "success" && json.data) {
+                    const freshData = json.data;
+                    const isDataChanged = JSON.stringify(freshData) !== JSON.stringify(dataWarga);
+
+                    // Update state & simpan cache baru
+                    dataWarga = freshData;
+                    saveCacheData(freshData);
+                    populateKeteranganOptions();
+                    filterData();
+
+                    if (forceRefresh) {
+                        showToast("✅ Data berhasil disinkronkan dari server!");
+                    } else if (isDataChanged && cacheLoaded) {
+                        showToast("✨ Data terbaru diperbarui di latar belakang!");
+                    } else if (!cacheLoaded) {
+                        showToast("✅ Data berhasil dimuat!");
+                    }
+                } else {
+                    throw new Error(json.message || "Gagal mengambil data");
+                }
+            } catch (err) {
+                console.error("Gagal sinkron:", err);
+                if (!cacheLoaded) {
+                    showToast("❌ Gagal terhubung ke Google Sheet.");
+                } else {
+                    showToast("⚠️ Menggunakan data cache (Gagal terhubung ke server).");
+                }
+            }
+        }
+
+        function populateKeteranganOptions() {
+            if (!document.getElementById('ms-ket-list')) return;
+            const uniqueKeterangan = [...new Set(dataWarga.map(item => (item.keterangan || '').trim()))]
+                .filter(Boolean)
+                .sort();
+            const opts = uniqueKeterangan.map(k => ({ value: k, label: k }));
+            opts.push({ value: 'EMPTY', label: '(Tanpa Keterangan)' });
+            renderMultiSelect('ket', opts);
+        }
+
+        function filterData() {
+            const searchVal = document.getElementById('search-input')?.value.toLowerCase().trim() || '';
+            const statusVal = document.getElementById('filter-status')?.value || 'ALL';
+            const ketSel = [...msState.ket].map(v => v === 'EMPTY' ? 'EMPTY' : v.toLowerCase());
+            const rtSel = msState.rt;
+            const tpsVal = document.getElementById('filter-tps')?.value || 'ALL';
+
+            filteredData = dataWarga.filter(item => {
+                const nama = (item.nama || '').toLowerCase();
+                const nik = String(item.nik || '');
+                const kk = String(item.kk || '');
+                const ket = (item.keterangan || '').trim();
+                const ketLower = ket.toLowerCase();
+                
+                const matchSearch = nama.includes(searchVal) || nik.includes(searchVal) || kk.includes(searchVal) || ketLower.includes(searchVal);
+                const matchStatus = statusVal === 'ALL' || item.statusPemilih === statusVal;
+                
+                const matchKeterangan = ketSel.length === 0 ||
+                    (ket === '' ? ketSel.includes('EMPTY') : ketSel.includes(ketLower));
+                
+                const itemRt = item.rt ? String(item.rt).padStart(3, '0') : '';
+                const matchRt = rtSel.size === 0 || rtSel.has(itemRt);
+                
+                const itemTps = item.tps ? String(item.tps).padStart(2, '0') : '';
+                const filterTps = tpsVal === 'ALL' ? 'ALL' : String(tpsVal).padStart(2, '0');
+                const matchTps = tpsVal === 'ALL' || itemTps === filterTps || item.tps === tpsVal;
+
+                return matchSearch && matchStatus && matchKeterangan && matchRt && matchTps;
+            });
+
+            filteredData.sort((a, b) => String(a.kk || '').localeCompare(String(b.kk || '')));
+            currentPage = 1;
+            renderDashboard();
+        }
+
+        function resetFilters() {
+            if (document.getElementById('search-input')) document.getElementById('search-input').value = '';
+            if (document.getElementById('filter-status')) document.getElementById('filter-status').value = 'ALL';
+            resetMultiSelects();
+            if (document.getElementById('filter-tps')) document.getElementById('filter-tps').value = 'ALL';
+            filterData();
+        }
+
+        function renderDashboard() {
+            renderTable(filteredData);
+            updateStats(filteredData);
+            updateCharts(filteredData);
+            if (activeView === 'rincian') {
+                renderRincianPemilih();
+            }
+        }
+
+        function normalizeTps(tps) {
+            if (!tps) return '';
+            const num = String(tps).replace(/\D/g, '');
+            if (num) return String(parseInt(num, 10)).padStart(2, '0');
+            return String(tps).trim();
+        }
+
+        function renderRincianPemilih() {
+            const container = document.getElementById('rincian-tables-container');
+            if (!container) return;
+
+            const statusFilter = document.getElementById('rincian-filter-status')?.value || 'ALL';
+            const tpsFilter = document.getElementById('rincian-filter-tps')?.value || 'ALL';
+            const searchVal = document.getElementById('rincian-search')?.value.toLowerCase().trim() || '';
+
+            let sourceData = dataWarga;
+            if (statusFilter !== 'ALL') {
+                sourceData = dataWarga.filter(w => w.statusPemilih === statusFilter);
+            }
+
+            let tpsList = ['01', '02'];
+            if (tpsFilter === '01') tpsList = ['01'];
+            else if (tpsFilter === '02') tpsList = ['02'];
+
+            let fullHtml = '';
+
+            tpsList.forEach(tpsKey => {
+                const tpsData = sourceData.filter(w => normalizeTps(w.tps) === tpsKey);
+
+                const ketMap = {};
+                tpsData.forEach(w => {
+                    let ket = (w.keterangan || '').trim();
+                    if (!ket) ket = '(Tanpa Keterangan)';
+
+                    if (searchVal && !ket.toLowerCase().includes(searchVal)) return;
+
+                    if (!ketMap[ket]) {
+                        ketMap[ket] = new Array(37).fill(0);
+                    }
+
+                    const rtNum = parseInt(w.rt, 10);
+                    if (rtNum >= 1 && rtNum <= 36) {
+                        ketMap[ket][rtNum]++;
+                        ketMap[ket][0]++;
+                    }
+                });
+
+                const sortedKets = Object.keys(ketMap).sort((a, b) => ketMap[b][0] - ketMap[a][0]);
+                const colTotals = new Array(37).fill(0);
+
+                let tableHeaderHtml = `<th class="px-3 py-3 text-center sticky left-0 z-20 bg-slate-900 text-white border border-black shadow-md w-10">NO</th>`;
+                tableHeaderHtml += `<th class="px-4 py-3 text-left sticky left-10 z-20 bg-slate-900 text-white border border-black shadow-md min-w-[180px]">KETERANGAN</th>`;
+                for (let i = 1; i <= 36; i++) {
+                    tableHeaderHtml += `<th class="px-2 py-3 text-center border border-black min-w-[55px]">RT ${String(i).padStart(3, '0')}</th>`;
+                }
+                tableHeaderHtml += `<th class="px-4 py-3 text-center border border-black bg-indigo-950 text-indigo-200 min-w-[80px]">TOTAL</th>`;
+
+                let tableBodyHtml = '';
+
+                if (sortedKets.length === 0) {
+                    tableBodyHtml = `<tr><td colspan="39" class="px-6 py-8 text-center text-slate-500 border border-black">Tidak ada data rincian keterangan untuk TPS ${tpsKey}.</td></tr>`;
+                } else {
+                    sortedKets.forEach((ket, idx) => {
+                        const rowData = ketMap[ket];
+                        colTotals[0] += rowData[0];
+
+                        tableBodyHtml += `<tr class="hover:bg-slate-100 transition">`;
+                        tableBodyHtml += `<td class="px-3 py-2.5 text-center font-semibold text-slate-800 sticky left-0 bg-white z-10 border border-black">${idx + 1}</td>`;
+                        tableBodyHtml += `<td class="px-4 py-2.5 font-semibold text-slate-900 sticky left-10 bg-white z-10 border border-black truncate">${escapeHtml(ket)}</td>`;
+
+                        for (let rt = 1; rt <= 36; rt++) {
+                            const count = rowData[rt];
+                            colTotals[rt] += count;
+                            const badge = count > 0 
+                                ? `<span class="px-1.5 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-900">${count}</span>` 
+                                : `<span class="text-slate-400">-</span>`;
+                            tableBodyHtml += `<td class="px-2 py-2.5 text-center border border-black">${badge}</td>`;
+                        }
+
+                        tableBodyHtml += `<td class="px-4 py-2.5 text-center font-bold text-indigo-900 bg-indigo-50 border border-black">${rowData[0]}</td>`;
+                        tableBodyHtml += `</tr>`;
+                    });
+                }
+
+                let tableFooterHtml = `<tr>`;
+                tableFooterHtml += `<td colspan="2" class="px-4 py-3 text-right font-extrabold uppercase sticky left-0 z-10 bg-slate-200 text-slate-900 border border-black">TOTAL PER RT:</td>`;
+                for (let rt = 1; rt <= 36; rt++) {
+                    tableFooterHtml += `<td class="px-2 py-3 text-center font-bold border border-black text-slate-900">${colTotals[rt] > 0 ? colTotals[rt] : '-'}</td>`;
+                }
+                tableFooterHtml += `<td class="px-4 py-3 text-center font-extrabold text-sm text-indigo-950 bg-indigo-100 border border-black">${colTotals[0]}</td>`;
+                tableFooterHtml += `</tr>`;
+
+                const totalWargaTps = tpsData.length;
+
+                fullHtml += `
+                    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                        <div class="px-4 py-3 bg-indigo-900 text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-indigo-950">
+                            <div class="flex items-center space-x-2">
+                                <span class="bg-amber-400 text-slate-900 text-xs font-extrabold px-2.5 py-1 rounded-md shadow-sm">TPS ${tpsKey}</span>
+                                <h4 class="font-bold text-sm tracking-wide">Tabel Rincian Keterangan Pemilih - TPS ${tpsKey}</h4>
+                            </div>
+                            <div class="text-xs text-indigo-200 font-medium">
+                                Total Warga TPS ${tpsKey}: <span class="font-bold text-white">${totalWargaTps}</span> orang
+                            </div>
+                        </div>
+
+                        <div class="overflow-x-auto min-h-[220px] relative p-1">
+                            <table class="w-full text-xs text-left text-slate-700 border-collapse border border-black">
+                                <thead class="bg-slate-900 text-white uppercase font-bold text-[11px] tracking-wider sticky top-0 z-10">
+                                    <tr>${tableHeaderHtml}</tr>
+                                </thead>
+                                <tbody>${tableBodyHtml}</tbody>
+                                <tfoot class="bg-slate-100 font-bold border-t-2 border-black text-slate-900">${tableFooterHtml}</tfoot>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = fullHtml;
+        }
+
+        function renderTable(data) {
+            const tableBody = document.getElementById('table-body');
+            if (!tableBody) return;
+
+            const totalItems = data.length;
+            const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+            if (currentPage > totalPages) currentPage = totalPages;
+            if (currentPage < 1) currentPage = 1;
+
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, totalItems);
+            const pageData = data.slice(startIndex, endIndex);
+
+            if (pageData.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="12" class="px-6 py-10 text-center text-slate-400"><p class="font-medium text-slate-500">Data warga tidak ditemukan</p></td></tr>`;
+                renderPagination(0, 0, 0, 1);
+                return;
+            }
+
+            let html = '';
+            let prevKK = null;
+
+            pageData.forEach((warga, idx) => {
+                const absoluteIndex = startIndex + idx + 1;
+                
+                let borderClass = "border-t border-slate-200"; 
+                if (prevKK !== null && prevKK !== warga.kk) {
+                    borderClass = "border-t-2 border-slate-900";
+                }
+                prevKK = warga.kk;
+
+                const isPemilih = warga.statusPemilih === 'Pemilih';
+                const ketVal = warga.keterangan || '';
+                const usiaVal = getUsiaSafe(warga);
+
+                html += `
+                    <tr class="transition hover:bg-slate-50 ${borderClass}">
+                        <td class="px-3 py-3 text-center font-bold text-slate-500">${absoluteIndex}</td>
+                        <td class="px-3 py-3 font-mono text-xs font-bold text-indigo-950">${escapeHtml(warga.kk)}</td>
+                        <td class="px-3 py-3 font-mono text-xs text-slate-600">${escapeHtml(warga.nik)}</td>
+                        <td class="px-3 py-3 font-bold text-slate-900">${escapeHtml(warga.nama)}</td>
+                        <td class="px-3 py-3 text-slate-600">${escapeHtml(warga.tempatLahir)}</td>
+                        <td class="px-3 py-3 text-center text-slate-600">${formatDateIndo(warga.tanggalLahir)}</td>
+                        <td class="px-3 py-3 text-center font-semibold text-slate-700">${usiaVal}</td>
+                        <td class="px-3 py-3 text-center font-bold"><span class="px-2 py-0.5 text-xs rounded ${warga.jk === 'L' ? 'bg-blue-100 text-blue-700' : 'bg-pink-100 text-pink-700'}">${escapeHtml(warga.jk || '-')}</span></td>
+                        <td class="px-3 py-3 text-center font-semibold text-slate-700">${escapeHtml(warga.rt || '-')}</td>
+                        <td class="px-3 py-3 text-center font-semibold text-slate-700">${escapeHtml(warga.tps || '-')}</td>
+                        <td class="px-4 py-3 text-center">
+                            <select onchange="setStatusPemilih('${escapeHtml(String(warga.id))}', this.value)" class="w-full px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition cursor-pointer ${isPemilih ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100' : 'bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100'}">
+                                <option value="Pemilih" ${isPemilih ? 'selected' : ''}>Pemilih</option>
+                                <option value="Bukan Pemilih" ${!isPemilih ? 'selected' : ''}>Bukan Pemilih</option>
+                            </select>
+                        </td>
+                        <td class="px-4 py-3 text-left">
+                            ${isPemilih ? 
+                                `<input type="text" value="${escapeHtml(ketVal)}" onchange="updateKeterangan('${escapeHtml(String(warga.id))}', this.value)" placeholder="Ketik keterangan..." class="w-full px-2.5 py-1 text-xs bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 transition shadow-sm">` : 
+                                `<input type="text" value="${escapeHtml(ketVal)}" disabled placeholder="Khusus Pemilih" class="w-full px-2.5 py-1 text-xs bg-slate-100 border border-slate-200 text-slate-400 rounded-md cursor-not-allowed">`
+                            }
+                        </td>
+                    </tr>`;
+            });
+            tableBody.innerHTML = html;
+            renderPagination(totalItems, startIndex + 1, endIndex, totalPages);
+        }
+
+        // Kirim perubahan ke Google Sheet; beri tahu pengguna bila gagal tersimpan
+        function syncToServer(action, payload) {
+            if (!apiReady()) return;
+            apiRequest(action, payload)
+                .then(json => {
+                    if (!json || json.status !== "success") {
+                        console.error("Gagal simpan (" + action + "):", json);
+                        showToast("⚠️ Perubahan belum tersimpan ke server: " + ((json && json.message) || "kesalahan tidak dikenal"));
+                    }
+                })
+                .catch(err => {
+                    if (err && err.message === "Sesi berakhir") return; // sudah ditangani
+                    console.error("Error " + action + ":", err);
+                    showToast("⚠️ Gagal terhubung ke server. Perubahan hanya tersimpan di perangkat ini.");
+                });
+        }
+
+        function setStatusPemilih(id, newStatus) {
+            const warga = dataWarga.find(w => String(w.id) === String(id));
+            if (!warga) return;
+
+            warga.statusPemilih = newStatus;
+            saveCacheData(dataWarga); // Simpan langsung ke cache lokal
+            renderDashboard();
+            showToast(`Status <strong>${escapeHtml(warga.nama)}</strong> diubah menjadi <strong>${newStatus}</strong>`);
+
+            syncToServer("updateStatus", { id: id, statusPemilih: newStatus });
+        }
+
+        function updateKeterangan(id, newKeterangan) {
+            const warga = dataWarga.find(w => String(w.id) === String(id));
+            if (!warga) return;
+
+            warga.keterangan = newKeterangan;
+            saveCacheData(dataWarga); // Simpan langsung ke cache lokal
+            populateKeteranganOptions();
+            renderDashboard();
+            showToast(`Keterangan <strong>${escapeHtml(warga.nama)}</strong> diperbarui`);
+
+            syncToServer("updateKeterangan", { id: id, keterangan: newKeterangan });
+        }
+
+        function openDeleteModal(id) {
+            deleteTargetId = id;
+            const warga = dataWarga.find(w => String(w.id) === String(id));
+            if (!warga) return;
+            const nameEl = document.getElementById('delete-warga-name');
+            if (nameEl) nameEl.innerText = warga.nama;
+            const modal = document.getElementById('modal-delete');
+            if (modal) modal.classList.remove('hidden');
+        }
+
+        function closeDeleteModal() {
+            deleteTargetId = null;
+            const modal = document.getElementById('modal-delete');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        function confirmDeleteWarga() {
+            if (!deleteTargetId) return;
+            const warga = dataWarga.find(w => String(w.id) === String(deleteTargetId));
+            const targetName = warga ? warga.nama : 'Warga';
+            const deletedId = deleteTargetId;
+
+            dataWarga = dataWarga.filter(w => String(w.id) !== String(deleteTargetId));
+            saveCacheData(dataWarga); // Simpan langsung ke cache lokal
+            closeDeleteModal();
+
+            populateKeteranganOptions();
+            filterData();
+            showToast(`Data <strong>${escapeHtml(targetName)}</strong> berhasil dihapus.`);
+
+            syncToServer("delete", { id: deletedId });
+        }
+
+        function saveWarga(event) {
+            event.preventDefault();
+            const getVal = (id) => (document.getElementById(id)?.value || '').trim();
+
+            const newWarga = {
+                id: new Date().getTime(),
+                kk: getVal('add-kk'),
+                nik: getVal('add-nik'),
+                nama: getVal('add-nama').toUpperCase(),
+                tempatLahir: getVal('add-tempat').toUpperCase(),
+                tanggalLahir: getVal('add-tanggal'),
+                jk: getVal('add-jk'),
+                rt: getVal('add-rt'),
+                tps: getVal('add-tps'),
+                statusPemilih: getVal('add-status') || 'Bukan Pemilih',
+                keterangan: getVal('add-keterangan')
+            };
+
+            newWarga.usia = calculateAge(newWarga.tanggalLahir);
+
+            dataWarga.push(newWarga);
+            saveCacheData(dataWarga); // Simpan langsung ke cache lokal
+            closeAddWargaModal();
+            populateKeteranganOptions();
+            filterData();
+            showToast(`Warga <strong>${escapeHtml(newWarga.nama)}</strong> berhasil ditambahkan!`);
+
+            syncToServer("add", newWarga);
+        }
+
+        function renderPagination(totalItems, startItem, endItem, totalPages) {
+            const pageStart = document.getElementById('page-start');
+            const pageEnd = document.getElementById('page-end');
+            const totalItemsEl = document.getElementById('total-items');
+            const buttonsEl = document.getElementById('pagination-buttons');
+
+            if (pageStart) pageStart.innerText = totalItems === 0 ? 0 : startItem;
+            if (pageEnd) pageEnd.innerText = endItem;
+            if (totalItemsEl) totalItemsEl.innerText = totalItems;
+            if (!buttonsEl) return;
+
+            let btnHtml = `<button onclick="goToPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled class="opacity-40 px-2.5 py-1 border border-slate-300 rounded bg-white cursor-not-allowed"' : 'class="px-2.5 py-1 border border-slate-300 rounded bg-white hover:bg-slate-100"'}>&lt;</button>`;
+            for (let i = 1; i <= totalPages; i++) {
+                if (i === 1 || i === totalPages || (i >= currentPage - 1 && i <= currentPage + 1)) {
+                    btnHtml += `<button onclick="goToPage(${i})" class="px-2.5 py-1 border font-semibold rounded ${currentPage === i ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-slate-300 hover:bg-slate-100'}">${i}</button>`;
+                } else if (i === currentPage - 2 || i === currentPage + 2) {
+                    btnHtml += `<span class="px-1 text-slate-400">...</span>`;
+                }
+            }
+            btnHtml += `<button onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages || totalPages === 0 ? 'disabled class="opacity-40 px-2.5 py-1 border border-slate-300 rounded bg-white cursor-not-allowed"' : 'class="px-2.5 py-1 border border-slate-300 rounded bg-white hover:bg-slate-100"'}>&gt;</button>`;
+            buttonsEl.innerHTML = btnHtml;
+        }
+
+        function goToPage(page) {
+            const totalPages = Math.ceil(filteredData.length / itemsPerPage) || 1;
+            if (page < 1 || page > totalPages) return;
+            currentPage = page;
+            renderTable(filteredData);
+        }
+
+        function changeItemsPerPage() {
+            const el = document.getElementById('items-per-page');
+            itemsPerPage = parseInt(el?.value || '25', 10);
+            currentPage = 1;
+            renderTable(filteredData);
+        }
+
+        function updateStats(data) {
+            const statTotal = document.getElementById('stat-total');
+            const statPemilih = document.getElementById('stat-pemilih');
+            const statBukan = document.getElementById('stat-bukan');
+            const statKk = document.getElementById('stat-kk');
+
+            if (statTotal) statTotal.innerText = data.length;
+            if (statPemilih) statPemilih.innerText = data.filter(w => w.statusPemilih === 'Pemilih').length;
+            if (statBukan) statBukan.innerText = data.filter(w => w.statusPemilih === 'Bukan Pemilih').length;
+            if (statKk) statKk.innerText = new Set(data.map(w => w.kk).filter(Boolean)).size;
+        }
+
+        function initCharts() {
+            const ctxPemilih = document.getElementById('chartPemilih')?.getContext('2d');
+            const ctxGender = document.getElementById('chartGender')?.getContext('2d');
+            const ctxUmur = document.getElementById('chartUmur')?.getContext('2d');
+            const ctxKeterangan = document.getElementById('chartKeterangan')?.getContext('2d');
+
+            if (ctxPemilih && !chartPemilihInstance) {
+                chartPemilihInstance = new Chart(ctxPemilih, {
+                    type: 'bar',
+                    data: {
+                        labels: Array.from({ length: 36 }, (_, i) => `RT ${String(i + 1).padStart(3, '0')}`),
+                        datasets: [
+                            { label: 'Pemilih', data: new Array(36).fill(0), backgroundColor: '#10b981' },
+                            { label: 'Bukan Pemilih', data: new Array(36).fill(0), backgroundColor: '#f43f5e' }
+                        ]
+                    },
+                    options: { 
+                        responsive: true, 
+                        maintainAspectRatio: false, 
+                        layout: { padding: { top: 18 } },
+                        scales: { 
+                            x: { ticks: { font: { size: 9 }, maxRotation: 90 } },
+                            y: { beginAtZero: true }
+                        } 
+                    },
+                    plugins: [{
+                        id: 'pemilihTopValueLabels',
+                        afterDatasetsDraw(chart) {
+                            const { ctx } = chart;
+                            chart.data.datasets.forEach((dataset, datasetIndex) => {
+                                const meta = chart.getDatasetMeta(datasetIndex);
+                                if (!meta.hidden) {
+                                    meta.data.forEach((bar, index) => {
+                                        const val = dataset.data[index];
+                                        if (val !== undefined && val !== null && val > 0) {
+                                            ctx.save();
+                                            ctx.font = 'bold 9px Inter, sans-serif';
+                                            ctx.fillStyle = datasetIndex === 0 ? '#047857' : '#be123c';
+                                            ctx.textAlign = 'center';
+                                            ctx.textBaseline = 'bottom';
+                                            ctx.fillText(val, bar.x, bar.y - 2);
+                                            ctx.restore();
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    }]
+                });
+            }
+
+            if (ctxGender && !chartGenderInstance) {
+                chartGenderInstance = new Chart(ctxGender, {
+                    type: 'pie',
+                    data: { labels: ['Laki-Laki', 'Perempuan'], datasets: [{ data: [0, 0], backgroundColor: ['#3b82f6', '#ec4899'] }] },
+                    options: { responsive: true, maintainAspectRatio: false }
+                });
+            }
+
+            if (ctxUmur && !chartUmurInstance) {
+                chartUmurInstance = new Chart(ctxUmur, {
+                    type: 'bar',
+                    data: { labels: ['< 17 Thn', '17-30 Thn', '31-50 Thn', '> 50 Thn'], datasets: [{ data: [0, 0, 0, 0], backgroundColor: '#6366f1' }] },
+                    options: { 
+                        responsive: true, 
+                        maintainAspectRatio: false, 
+                        layout: { padding: { top: 20 } },
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true } }
+                    },
+                    plugins: [{
+                        id: 'umurTopValueLabels',
+                        afterDatasetsDraw(chart) {
+                            const { ctx } = chart;
+                            chart.data.datasets.forEach((dataset, datasetIndex) => {
+                                const meta = chart.getDatasetMeta(datasetIndex);
+                                if (!meta.hidden) {
+                                    meta.data.forEach((bar, index) => {
+                                        const val = dataset.data[index];
+                                        if (val !== undefined && val !== null && val > 0) {
+                                            ctx.save();
+                                            ctx.font = 'bold 11px Inter, sans-serif';
+                                            ctx.fillStyle = '#4338ca';
+                                            ctx.textAlign = 'center';
+                                            ctx.textBaseline = 'bottom';
+                                            ctx.fillText(val + ' Warga', bar.x, bar.y - 3);
+                                            ctx.restore();
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    }]
+                });
+            }
+
+            if (ctxKeterangan && !chartKeteranganInstance) {
+                chartKeteranganInstance = new Chart(ctxKeterangan, {
+                    type: 'bar',
+                    data: {
+                        labels: [],
+                        datasets: [
+                            { label: 'Pemilih', data: [], backgroundColor: '#10b981', borderRadius: 4 },
+                            { label: 'Bukan Pemilih', data: [], backgroundColor: '#f43f5e', borderRadius: 4 }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        layout: { padding: { top: 25 } },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: { label: function(context) { return ` ${context.dataset.label}: ${context.parsed.y} Warga`; } }
+                            }
+                        },
+                        scales: {
+                            x: { ticks: { font: { size: 10, weight: '600' }, maxRotation: 45 } },
+                            y: { beginAtZero: true, ticks: { precision: 0, font: { size: 10 } } }
+                        }
+                    },
+                    plugins: [{
+                        id: 'keteranganValueLabels',
+                        afterDatasetsDraw(chart) {
+                            const { ctx } = chart;
+                            chart.data.datasets.forEach((dataset, datasetIndex) => {
+                                const meta = chart.getDatasetMeta(datasetIndex);
+                                if (!meta.hidden) {
+                                    meta.data.forEach((bar, index) => {
+                                        const val = dataset.data[index];
+                                        if (val !== undefined && val !== null && val > 0) {
+                                            ctx.save();
+                                            ctx.font = 'bold 10px Inter, sans-serif';
+                                            ctx.fillStyle = datasetIndex === 0 ? '#047857' : '#be123c';
+                                            ctx.textAlign = 'center';
+                                            ctx.textBaseline = 'bottom';
+                                            ctx.fillText(`${val}`, bar.x, bar.y - 3);
+                                            ctx.restore();
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    }]
+                });
+            }
+        }
+
+        function updateCharts(data) {
+            if (!chartPemilihInstance || !chartGenderInstance || !chartUmurInstance || !chartKeteranganInstance) {
+                initCharts();
+            }
+
+            const pemilihPerRt = new Array(36).fill(0);
+            const bukanPerRt = new Array(36).fill(0);
+            
+            data.forEach(w => {
+                const rtNum = parseInt(w.rt, 10);
+                if (rtNum >= 1 && rtNum <= 36) {
+                    if (w.statusPemilih === 'Pemilih') pemilihPerRt[rtNum - 1]++;
+                    else bukanPerRt[rtNum - 1]++;
+                }
+            });
+
+            if (chartPemilihInstance) {
+                chartPemilihInstance.data.datasets[0].data = pemilihPerRt;
+                chartPemilihInstance.data.datasets[1].data = bukanPerRt;
+                chartPemilihInstance.update();
+            }
+
+            if (chartGenderInstance) {
+                chartGenderInstance.data.datasets[0].data = [
+                    data.filter(w => w.jk === 'L').length, 
+                    data.filter(w => w.jk === 'P').length
+                ];
+                chartGenderInstance.update();
+            }
+
+            if (chartUmurInstance) {
+                chartUmurInstance.data.datasets[0].data = [
+                    data.filter(w => getUsiaSafe(w) < 17).length,
+                    data.filter(w => { const u = getUsiaSafe(w); return u >= 17 && u <= 30; }).length,
+                    data.filter(w => { const u = getUsiaSafe(w); return u >= 31 && u <= 50; }).length,
+                    data.filter(w => getUsiaSafe(w) > 50).length
+                ];
+                chartUmurInstance.update();
+            }
+
+            const ketMap = {};
+            
+            data.forEach(w => {
+                let ket = (w.keterangan || '').trim();
+                if (!ket) {
+                    ket = '(Tanpa Keterangan)';
+                }
+                
+                if (!ketMap[ket]) {
+                    ketMap[ket] = { pemilih: 0, bukanPemilih: 0, total: 0 };
+                }
+
+                if (w.statusPemilih === 'Pemilih') {
+                    ketMap[ket].pemilih++;
+                } else {
+                    ketMap[ket].bukanPemilih++;
+                }
+                ketMap[ket].total++;
+            });
+
+            const sortedKet = Object.entries(ketMap).sort((a, b) => b[1].total - a[1].total);
+            
+            const ketLabels = sortedKet.map(item => item[0]);
+            const pemilihCounts = sortedKet.map(item => item[1].pemilih);
+            const LabelCounts = sortedKet.map(item => item[1].bukanPemilih);
+
+            if (chartKeteranganInstance) {
+                chartKeteranganInstance.data.labels = ketLabels.length > 0 ? ketLabels : ['(Tidak ada data)'];
+                chartKeteranganInstance.data.datasets[0].data = pemilihCounts.length > 0 ? pemilihCounts : [0];
+                chartKeteranganInstance.data.datasets[1].data = LabelCounts.length > 0 ? LabelCounts : [0];
+                chartKeteranganInstance.update();
+            }
+        }
+
+        function toggleAddKeteranganField() {
+            const statusSelect = document.getElementById('add-status');
+            const ketInput = document.getElementById('add-keterangan');
+            if (!statusSelect || !ketInput) return;
+
+            if (statusSelect.value === 'Pemilih') {
+                ketInput.disabled = false;
+                ketInput.classList.remove('bg-slate-100', 'text-slate-400', 'cursor-not-allowed');
+                ketInput.classList.add('bg-white', 'text-slate-800');
+                ketInput.placeholder = 'Ketik keterangan pemilih...';
+            } else {
+                ketInput.disabled = true;
+                ketInput.value = '';
+                ketInput.classList.add('bg-slate-100', 'text-slate-400', 'cursor-not-allowed');
+                ketInput.classList.remove('bg-white', 'text-slate-800');
+                ketInput.placeholder = 'Aktif bila status Pemilih';
+            }
+        }
+
+        function openAddWargaModal() { 
+            const modal = document.getElementById('modal-add');
+            if (modal) modal.classList.remove('hidden'); 
+            toggleAddKeteranganField();
+        }
+
+        function closeAddWargaModal() { 
+            const modal = document.getElementById('modal-add');
+            const form = document.getElementById('form-tambah-warga');
+            if (modal) modal.classList.add('hidden'); 
+            if (form) form.reset(); 
+            toggleAddKeteranganField();
+        }
+
+        function exportDataToPDF() {
+            if (filteredData.length === 0) { 
+                showToast('Tidak ada data untuk diekspor!'); 
+                return; 
+            }
+            
+            try {
+                const jsPDFClass = window.jspdf ? window.jspdf.jsPDF : window.jsPDF;
+                if (!jsPDFClass) {
+                    showToast('Pustaka PDF belum siap. Silakan coba lagi.');
+                    return;
+                }
+                const doc = new jsPDFClass({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+                
+                doc.setFontSize(14);
+                doc.setFont("helvetica", "bold");
+                doc.text("DAFTAR PEMILIH & DATA WARGA", 14, 15);
+                
+                doc.setFontSize(9);
+                doc.setFont("helvetica", "normal");
+                doc.text(`Tanggal Unduh: ${new Date().toLocaleDateString('id-ID')} | Total: ${filteredData.length} Data (NIK & NKK disembunyikan)`, 14, 21);
+
+                const newGroupRowIndexes = [];
+                let lastKK = null;
+                filteredData.forEach((item, index) => {
+                    if (lastKK !== null && item.kk !== lastKK) {
+                        newGroupRowIndexes.push(index);
+                    }
+                    lastKK = item.kk;
+                });
+
+                doc.autoTable({
+                    head: [["NO", "NAMA LENGKAP", "TEMPAT LAHIR", "TGL LAHIR", "UMUR", "JK", "RT", "TPS", "STATUS", "KETERANGAN"]],
+                    body: filteredData.map((item, idx) => [
+                        idx + 1, 
+                        item.nama || '-', 
+                        item.tempatLahir || '-', 
+                        formatDateIndo(item.tanggalLahir), 
+                        getUsiaSafe(item),
+                        item.jk || '-', 
+                        item.rt || '-', 
+                        item.tps || '-', 
+                        item.statusPemilih || '-',
+                        item.keterangan || '-'
+                    ]),
+                    startY: 26,
+                    styles: { fontSize: 8, cellPadding: 2 },
+                    headStyles: { fillColor: [15, 23, 42] },
+                    didDrawCell: function(data) {
+                        if (data.section === 'body' && newGroupRowIndexes.includes(data.row.index)) {
+                            doc.setDrawColor(0, 0, 0); 
+                            doc.setLineWidth(0.5);     
+                            doc.line(data.cell.x, data.cell.y, data.cell.x + data.cell.width, data.cell.y);
+                        }
+                    }
+                });
+
+                doc.save(`data_warga_${new Date().toISOString().slice(0,10)}.pdf`);
+                showToast('PDF berhasil diunduh!');
+            } catch (e) {
+                console.error("PDF Export Error:", e);
+                showToast('Gagal membuat file PDF.');
+            }
+        }
+
+        function exportRincianToPDF() {
+            try {
+                const jsPDFClass = window.jspdf ? window.jspdf.jsPDF : window.jsPDF;
+                if (!jsPDFClass) {
+                    showToast('Pustaka PDF belum siap. Silakan coba lagi.');
+                    return;
+                }
+                
+                const doc = new jsPDFClass({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+                
+                const statusFilter = document.getElementById('rincian-filter-status')?.value || 'ALL';
+                const tpsFilter = document.getElementById('rincian-filter-tps')?.value || 'ALL';
+                const searchVal = document.getElementById('rincian-search')?.value.toLowerCase().trim() || '';
+
+                let statusText = "Semua Status Pemilih";
+                if (statusFilter === "Pemilih") statusText = "Khusus Pemilih";
+                if (statusFilter === "Bukan Pemilih") statusText = "Khusus Bukan Pemilih";
+
+                let sourceData = dataWarga;
+                if (statusFilter !== 'ALL') {
+                    sourceData = dataWarga.filter(w => w.statusPemilih === statusFilter);
+                }
+
+                let tpsList = ['01', '02'];
+                if (tpsFilter === '01') tpsList = ['01'];
+                else if (tpsFilter === '02') tpsList = ['02'];
+
+                const headRow = ["NO", "KETERANGAN"];
+                for (let i = 1; i <= 36; i++) {
+                    headRow.push(`RT${String(i).padStart(3, '0')}`);
+                }
+                headRow.push("TOTAL");
+
+                const columnStyles = {
+                    0: { cellWidth: 8, halign: 'center' },
+                    1: { cellWidth: 41, halign: 'left' }
+                };
+                for (let i = 2; i <= 37; i++) {
+                    columnStyles[i] = { cellWidth: 6, halign: 'center' };
+                }
+                columnStyles[38] = { cellWidth: 16, halign: 'center', fontStyle: 'bold' };
+
+                tpsList.forEach((tpsKey, tpsIdx) => {
+                    if (tpsIdx > 0) {
+                        doc.addPage();
+                    }
+
+                    doc.setFontSize(12);
+                    doc.setFont("helvetica", "bold");
+                    doc.text(`TABEL RINCIAN KETERANGAN PEMILIH - TPS ${tpsKey}`, 148.5, 12, { align: 'center' });
+                    
+                    doc.setFontSize(8);
+                    doc.setFont("helvetica", "normal");
+                    doc.text(`Filter Status: ${statusText}  |  Tanggal Unduh: ${new Date().toLocaleDateString('id-ID')}`, 148.5, 17, { align: 'center' });
+
+                    const tpsData = sourceData.filter(w => normalizeTps(w.tps) === tpsKey);
+
+                    const ketMap = {};
+                    tpsData.forEach(w => {
+                        let ket = (w.keterangan || '').trim();
+                        if (!ket) ket = '(Tanpa Keterangan)';
+                        if (searchVal && !ket.toLowerCase().includes(searchVal)) return;
+
+                        if (!ketMap[ket]) {
+                            ketMap[ket] = new Array(37).fill(0);
+                        }
+
+                        const rtNum = parseInt(w.rt, 10);
+                        if (rtNum >= 1 && rtNum <= 36) {
+                            ketMap[ket][rtNum]++;
+                            ketMap[ket][0]++;
+                        }
+                    });
+
+                    const sortedKets = Object.keys(ketMap).sort((a, b) => ketMap[b][0] - ketMap[a][0]);
+                    const colTotals = new Array(37).fill(0);
+                    const bodyRows = [];
+
+                    sortedKets.forEach((ket, idx) => {
+                        const rowData = ketMap[ket];
+                        colTotals[0] += rowData[0];
+
+                        const row = [idx + 1, ket];
+                        for (let rt = 1; rt <= 36; rt++) {
+                            const count = rowData[rt];
+                            colTotals[rt] += count;
+                            row.push(count > 0 ? String(count) : '-');
+                        }
+                        row.push(String(rowData[0]));
+                        bodyRows.push(row);
+                    });
+
+                    const footRow = ["", "TOTAL PER RT:"];
+                    for (let rt = 1; rt <= 36; rt++) {
+                        footRow.push(colTotals[rt] > 0 ? String(colTotals[rt]) : '-');
+                    }
+                    footRow.push(String(colTotals[0]));
+
+                    if (bodyRows.length === 0) {
+                        bodyRows.push(["-", `Tidak ada data rincian untuk TPS ${tpsKey}`, ...new Array(37).fill("-")]);
+                    }
+
+                    doc.autoTable({
+                        head: [headRow],
+                        body: bodyRows,
+                        foot: [footRow],
+                        startY: 21,
+                        margin: { top: 21, left: 8, right: 8, bottom: 10 },
+                        styles: { 
+                            fontSize: 5.5, 
+                            cellPadding: 1.2, 
+                            lineColor: [0, 0, 0], 
+                            lineWidth: 0.15,
+                            textColor: [15, 23, 42]
+                        },
+                        headStyles: { 
+                            fillColor: [15, 23, 42], 
+                            textColor: [255, 255, 255], 
+                            fontStyle: 'bold', 
+                            halign: 'center',
+                            fontSize: 5.2,
+                            valign: 'middle'
+                        },
+                        footStyles: { 
+                            fillColor: [226, 232, 240], 
+                            textColor: [15, 23, 42], 
+                            fontStyle: 'bold', 
+                            halign: 'center',
+                            fontSize: 5.5,
+                            valign: 'middle'
+                        },
+                        columnStyles: columnStyles,
+                        theme: 'grid'
+                    });
+                });
+
+                doc.save(`rincian_pemilih_tps_${new Date().toISOString().slice(0,10)}.pdf`);
+                showToast('PDF Rincian Pemilih TPS berhasil diunduh!');
+            } catch (e) {
+                console.error("PDF Rincian Export Error:", e);
+                showToast('Gagal membuat file PDF Rincian.');
+            }
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toast-message');
+            if (!toast || !toastMsg) return;
+
+            toastMsg.innerHTML = message;
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            setTimeout(() => toast.classList.add('translate-y-20', 'opacity-0'), 3000);
+        }
+    </script>
+</body>
+</html>
